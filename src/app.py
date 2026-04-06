@@ -33,6 +33,9 @@ from ingest  import (
 )
 from agents              import run_debate
 from ticker_db           import resolve as ticker_resolve, search as ticker_search
+from screener            import (
+    build_screener_df, build_treemap, WATCHLIST, COLUMN_TOOLTIPS,
+)
 from correlation         import log_event, get_pearson, bootstrap_from_history
 from recap               import get_daily_recap
 from prescriptive_engine import (
@@ -122,6 +125,29 @@ html,body,[data-testid="stAppViewContainer"]{
 .mc-stat{background:rgba(255,255,255,0.04);border-radius:8px;padding:8px 12px;text-align:center;}
 .mc-stat .label{font-size:0.65rem;color:#475569;text-transform:uppercase;letter-spacing:.06em;}
 .mc-stat .value{font-size:0.95rem;font-weight:700;margin-top:2px;}
+/* ── Screener grid ── */
+.screener-header{font-size:0.65rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;color:#475569;padding:6px 0;}
+.screener-row{display:grid;gap:6px;align-items:center;padding:9px 14px;
+  border-bottom:1px solid rgba(255,255,255,0.04);font-size:0.82rem;
+  transition:background 0.15s;}
+.screener-row:hover{background:rgba(255,255,255,0.04);}
+.sig-buy{color:#00e676;font-weight:800;font-size:0.78rem;}
+.sig-sell{color:#ff4757;font-weight:800;font-size:0.78rem;}
+.sig-hold{color:#ffa500;font-weight:800;font-size:0.78rem;}
+.chg-pos{color:#00e676;font-weight:600;}
+.chg-neg{color:#ff4757;font-weight:600;}
+.macro-high{color:#ff4757;font-weight:700;font-size:0.72rem;}
+.macro-med{color:#ffa500;font-weight:700;font-size:0.72rem;}
+.macro-low{color:#00e676;font-weight:700;font-size:0.72rem;}
+.tooltip-col{position:relative;display:inline-block;cursor:help;
+  border-bottom:1px dotted #475569;}
+.filter-chip{display:inline-block;background:rgba(99,102,241,0.15);
+  border:1px solid rgba(99,102,241,0.3);border-radius:999px;
+  padding:3px 12px;font-size:0.72rem;color:#a5b4fc;margin:3px 3px 3px 0;}
+.screener-stat{background:rgba(255,255,255,0.04);border-radius:10px;
+  padding:10px 16px;text-align:center;}
+.screener-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;}
 [data-testid="stMetricValue"]{font-size:1.22rem!important;font-weight:700!important;}
 .stTabs [data-baseweb="tab-list"]{background:rgba(255,255,255,0.03)!important;border-radius:12px;gap:4px;}
 .stTabs [data-baseweb="tab"]{border-radius:9px!important;color:#64748b!important;font-weight:500!important;}
@@ -368,6 +394,19 @@ with st.sidebar:
             st.session_state.cv_running = False
             st.toast("CV complete!", icon="✅")
 
+    # ── Smart Filter (Screener) ────────────────────────────────────────────────
+    st.divider()
+    st.markdown('<p class="section-title">Smart Screener Filters</p>',
+                unsafe_allow_html=True)
+    sf_verified  = st.toggle("Verified News Only (Veracity > 85%)", value=False)
+    sf_safehaven = st.toggle("Geopolitical Safe-Havens", value=False,
+                             help="Show Gold, Defense, and low-geo-risk tickers")
+    sf_momentum  = st.toggle("High-Momentum Tech", value=False,
+                             help="Show Tech sector with Oracle BUY signal")
+    sf_region    = st.radio("Region", ["All", "USA", "India"],
+                            horizontal=True, label_visibility="visible")
+    sf_signal    = st.selectbox("Oracle Signal", ["All", "BUY", "HOLD", "SELL"])
+
     # ── Bull vs Bear Debate Panel ──────────────────────────────────────────────
     st.divider()
     st.markdown('<p class="section-title">Bull vs Bear Debate</p>', unsafe_allow_html=True)
@@ -538,10 +577,243 @@ st.session_state["cached_regime"] = _regime
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab_live, tab_hold, tab_oracle_t, tab_macro, tab_recap, tab_cv = st.tabs([
-    "📊 Live", "💼 Holdings", "🔮 Oracle", "🏛️ Macro / FRED",
+tab_screener, tab_live, tab_hold, tab_oracle_t, tab_macro, tab_recap, tab_cv = st.tabs([
+    "🌍 Screener", "📊 Live", "💼 Holdings", "🔮 Oracle", "🏛️ Macro / FRED",
     "📰 Market Recap", "📋 CV Metrics",
 ])
+
+# ────────────────────────────────────────────────────────────────────────────
+# TAB 0 — GLOBAL SCREENER
+# ────────────────────────────────────────────────────────────────────────────
+with tab_screener:
+    st.markdown("## 🌍 Ultimate Global Screener")
+    st.markdown(
+        '<p style="color:#64748b;font-size:0.83rem;margin-bottom:4px;">'
+        '25-ticker universe · MAG7 + US Blue-Chips + NIFTY50 Top 10 · '
+        'Oracle signals updated every 15 min · Hover column headers for definitions.</p>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Load / refresh screener data ──────────────────────────────────────────
+    scr_col1, scr_col2 = st.columns([1, 6])
+    with scr_col1:
+        scr_refresh = st.button("🔄 Refresh Grid", use_container_width=True)
+    with scr_col2:
+        # Active filter chips
+        active_chips = []
+        if sf_verified:  active_chips.append("✓ Veracity > 85%")
+        if sf_safehaven: active_chips.append("🛡 Safe-Havens")
+        if sf_momentum:  active_chips.append("⚡ High-Momentum Tech")
+        if sf_region != "All": active_chips.append(f"📍 {sf_region}")
+        if sf_signal != "All": active_chips.append(f"🎯 {sf_signal}")
+        if active_chips:
+            chips_html = " ".join(f'<span class="filter-chip">{c}</span>'
+                                  for c in active_chips)
+            st.markdown(chips_html, unsafe_allow_html=True)
+
+    with st.spinner("Building screener grid… (first load ~30s, then cached 15 min)"):
+        scr_df = build_screener_df(
+            headline, macro_st,
+            tickers=list(WATCHLIST.keys()),
+            force=scr_refresh,
+        )
+
+    if scr_df.empty:
+        st.warning("Could not load screener data. Check network / yfinance access.")
+    else:
+        # ── Apply Smart Filters ───────────────────────────────────────────────
+        fdf = scr_df.copy()
+
+        if sf_verified:
+            fdf = fdf[fdf["Veracity%"] > 85]
+
+        if sf_safehaven:
+            safe_sectors  = {"Commod", "Defense"}
+            safe_tickers  = {"GLD", "ITA", "JNJ", "XOM"}
+            safe_geo_mask = fdf["Geo Score"] >= 0
+            fdf = fdf[
+                fdf["Sector"].isin(safe_sectors) |
+                fdf["Ticker"].isin(safe_tickers) |
+                safe_geo_mask
+            ]
+
+        if sf_momentum:
+            fdf = fdf[(fdf["Sector"] == "Tech") & (fdf["Oracle"] == "BUY")]
+
+        if sf_region != "All":
+            fdf = fdf[fdf["Region"] == sf_region]
+
+        if sf_signal != "All":
+            fdf = fdf[fdf["Oracle"] == sf_signal]
+
+        # ── Summary stats bar ─────────────────────────────────────────────────
+        n_buy   = int((fdf["Oracle"] == "BUY").sum())
+        n_sell  = int((fdf["Oracle"] == "SELL").sum())
+        n_hold  = int((fdf["Oracle"] == "HOLD").sum())
+        avg_geo = fdf["Geo Score"].mean() if not fdf.empty else 0.0
+        st.markdown(f"""
+<div class="screener-summary">
+  <div class="screener-stat">
+    <div style="font-size:0.65rem;color:#475569;text-transform:uppercase;">BUY Signals</div>
+    <div style="font-size:1.4rem;font-weight:800;color:#00e676;">{n_buy}</div>
+  </div>
+  <div class="screener-stat">
+    <div style="font-size:0.65rem;color:#475569;text-transform:uppercase;">SELL Signals</div>
+    <div style="font-size:1.4rem;font-weight:800;color:#ff4757;">{n_sell}</div>
+  </div>
+  <div class="screener-stat">
+    <div style="font-size:0.65rem;color:#475569;text-transform:uppercase;">HOLD Signals</div>
+    <div style="font-size:1.4rem;font-weight:800;color:#ffa500;">{n_hold}</div>
+  </div>
+  <div class="screener-stat">
+    <div style="font-size:0.65rem;color:#475569;text-transform:uppercase;">Avg Geo Score</div>
+    <div style="font-size:1.4rem;font-weight:800;
+         color:{'#00e676' if avg_geo>=0 else '#ff4757'};">{avg_geo:+.3f}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        # ── Geopolitical Treemap ──────────────────────────────────────────────
+        st.markdown("#### Global Market Mood — Geopolitical Heatmap")
+        _tooltip_tree = (
+            "Size = approximate market capitalisation. "
+            "Colour = Gemini AI geopolitical sentiment score "
+            "(green = bullish, red = bearish). Click to drill down."
+        )
+        st.caption(_tooltip_tree)
+        fig_tree = build_treemap(fdf)
+        st.plotly_chart(fig_tree, use_container_width=True)
+
+        st.divider()
+
+        # ── Column tooltips header ────────────────────────────────────────────
+        DISPLAY_COLS = ["Ticker", "Name", "Region", "Sector", "Price",
+                        "24h Chg%", "Oracle", "Geo Score", "Veracity%",
+                        "Macro Risk", "ATR%"]
+
+        # Render tooltip header row
+        header_html = '<div style="display:grid;grid-template-columns:' \
+                      '90px 130px 60px 70px 90px 70px 60px 80px 80px 80px 55px 1fr;' \
+                      'gap:4px;padding:6px 14px;border-bottom:1px solid rgba(255,255,255,0.1);">'
+        for col in DISPLAY_COLS:
+            tip = COLUMN_TOOLTIPS.get(col, "")
+            header_html += (
+                f'<span class="tooltip-col" title="{tip}" '
+                f'style="font-size:0.62rem;font-weight:700;text-transform:uppercase;'
+                f'color:#475569;letter-spacing:.08em;">{col}</span>'
+            )
+        header_html += '<span style="font-size:0.62rem;font-weight:700;text-transform:uppercase;color:#475569;">AI Signal Reason</span>'
+        header_html += '</div>'
+        st.markdown(header_html, unsafe_allow_html=True)
+
+        # ── Grid rows ─────────────────────────────────────────────────────────
+        # Sort: SELL first (highest risk), then HOLD, then BUY; within each by |composite|
+        sort_order = {"SELL": 0, "HOLD": 1, "BUY": 2}
+        fdf_sorted = fdf.copy()
+        fdf_sorted["_sort_sig"] = fdf_sorted["Oracle"].map(sort_order).fillna(1)
+        fdf_sorted = fdf_sorted.sort_values(
+            ["_sort_sig", "_composite"], ascending=[True, True]
+        )
+
+        for _, row in fdf_sorted.iterrows():
+            chg      = row["_chg_raw"]
+            sig      = row["Oracle"]
+            geo      = row["Geo Score"]
+            macro_r  = row["Macro Risk"]
+            chg_cls  = "chg-pos" if chg >= 0 else "chg-neg"
+            sig_cls  = f"sig-{sig.lower()}"
+            mac_cls  = f"macro-{'high' if macro_r=='HIGH' else 'med' if macro_r=='MEDIUM' else 'low'}"
+            geo_col  = "#00e676" if geo >= 0.2 else "#ff4757" if geo <= -0.2 else "#ffa500"
+            ver_col  = "#00e676" if row["Veracity%"] >= 85 else "#ffa500" if row["Veracity%"] >= 60 else "#ff4757"
+            region_flag = "🇺🇸" if row["Region"] == "USA" else "🇮🇳"
+            atr_col  = "#ff4757" if row["ATR%"] > 3 else "#ffa500" if row["ATR%"] > 1.5 else "#00e676"
+
+            st.markdown(f"""
+<div class="screener-row" style="display:grid;grid-template-columns:90px 130px 60px 70px 90px 70px 60px 80px 80px 80px 55px 1fr;gap:4px;padding:9px 14px;">
+  <span style="font-weight:700;font-size:0.83rem;">{row['Ticker']}</span>
+  <span style="color:#94a3b8;font-size:0.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{row['Name']}">{row['Name']}</span>
+  <span style="font-size:0.75rem;color:#64748b;">{region_flag}</span>
+  <span style="font-size:0.72rem;color:#64748b;">{row['Sector']}</span>
+  <span style="font-size:0.82rem;font-weight:600;">{row['Price']}</span>
+  <span class="{chg_cls}" style="font-size:0.8rem;">{chg:+.2f}%</span>
+  <span class="{sig_cls}">{sig}</span>
+  <span style="color:{geo_col};font-size:0.8rem;font-weight:600;">{geo:+.3f}</span>
+  <span style="color:{ver_col};font-size:0.8rem;">{row['Veracity%']:.0f}%</span>
+  <span class="{mac_cls}">{macro_r}</span>
+  <span style="color:{atr_col};font-size:0.78rem;">{row['ATR%']:.2f}%</span>
+  <span style="font-size:0.72rem;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+        title="{row['Signal']}">{row['Signal'][:90]}{"…" if len(row['Signal'])>90 else ""}</span>
+</div>""", unsafe_allow_html=True)
+
+        st.divider()
+
+        # ── Sector breakdown bar chart ────────────────────────────────────────
+        sc1, sc2 = st.columns(2)
+        with sc1:
+            if not fdf.empty:
+                sec_grp = fdf.groupby("Sector")["_composite"].mean().sort_values()
+                s_colors = ["#00e676" if v >= 0.1 else "#ff4757" if v <= -0.1 else "#ffa500"
+                            for v in sec_grp.values]
+                fig_sec = go.Figure(go.Bar(
+                    x=sec_grp.values, y=sec_grp.index,
+                    orientation="h", marker_color=s_colors,
+                    text=[f"{v:+.3f}" for v in sec_grp.values],
+                    textposition="outside", textfont=dict(size=10, color="#94a3b8"),
+                ))
+                fig_sec.update_layout(
+                    title="Oracle Composite by Sector",
+                    template="plotly_dark", height=300,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(255,255,255,0.015)",
+                    xaxis=dict(range=[-1.1, 1.1], gridcolor="rgba(255,255,255,0.04)",
+                               zeroline=True, zerolinecolor="rgba(255,255,255,0.1)"),
+                    margin=dict(l=0, r=60, t=44, b=0),
+                )
+                st.plotly_chart(fig_sec, use_container_width=True)
+
+        with sc2:
+            if not fdf.empty:
+                sig_counts = fdf["Oracle"].value_counts()
+                sig_colors_map = {"BUY": "#00e676", "HOLD": "#ffa500", "SELL": "#ff4757"}
+                fig_sig = go.Figure(go.Pie(
+                    labels=sig_counts.index.tolist(),
+                    values=sig_counts.values.tolist(),
+                    hole=0.55,
+                    marker=dict(colors=[sig_colors_map.get(s, "#6366f1") for s in sig_counts.index]),
+                    textfont=dict(size=11, color="white"),
+                    hovertemplate="%{label}: %{value} tickers (%{percent})<extra></extra>",
+                ))
+                fig_sig.update_layout(
+                    title="Signal Distribution",
+                    template="plotly_dark", height=300,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=0, r=0, t=44, b=0),
+                    legend=dict(bgcolor="rgba(0,0,0,0)"),
+                )
+                st.plotly_chart(fig_sig, use_container_width=True)
+
+        # ── Column glossary (beginner layer) ──────────────────────────────────
+        with st.expander("📖 Column Glossary — What does each column mean?"):
+            for col, tip in COLUMN_TOOLTIPS.items():
+                st.markdown(
+                    f'<div class="glass-sm" style="padding:8px 14px;margin-bottom:4px;">'
+                    f'<b style="color:#a5b4fc;">{col}</b>'
+                    f'<span style="color:#64748b;"> — </span>'
+                    f'<span style="color:#94a3b8;font-size:0.85rem;">{tip}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # ── Export ────────────────────────────────────────────────────────────
+        export_cols = [c for c in DISPLAY_COLS if c in fdf.columns] + ["Signal"]
+        csv_data = fdf[export_cols].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇ Export Screener CSV",
+            data=csv_data,
+            file_name=f"oracle_screener_{datetime.now():%Y%m%d_%H%M}.csv",
+            mime="text/csv",
+            use_container_width=False,
+        )
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # TAB 1 — LIVE DASHBOARD
