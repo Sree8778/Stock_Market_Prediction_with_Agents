@@ -36,6 +36,7 @@ from ticker_db           import resolve as ticker_resolve, search as ticker_sear
 from screener            import (
     build_screener_df, build_treemap, WATCHLIST, COLUMN_TOOLTIPS,
 )
+from analyst_view        import render_analyst_view
 from correlation         import log_event, get_pearson, bootstrap_from_history
 from recap               import get_daily_recap
 from prescriptive_engine import (
@@ -158,7 +159,8 @@ html,body,[data-testid="stAppViewContainer"]{
 
 # ── Session state ──────────────────────────────────────────────────────────────
 for k, v in [("chat_history", []), ("cv_thread", None), ("cv_running", False),
-             ("debate_result", None), ("debate_ticker", None), ("debate_running", False)]:
+             ("debate_result", None), ("debate_ticker", None), ("debate_running", False),
+             ("selected_stock", None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -575,6 +577,27 @@ _mc = run_monte_carlo_cached(
 st.session_state["cached_regime"] = _regime
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANALYST DRILL-DOWN ROUTING
+# If a stock has been selected from the screener, render its full analyst page
+# and stop — skipping the normal tab layout entirely.
+# ══════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("selected_stock"):
+    _sel = st.session_state["selected_stock"]
+    _scr_row = {}
+    # Try to get the cached screener row for this ticker so analyst_view has
+    # pre-computed Oracle/Geo/Veracity values without re-fetching.
+    try:
+        _scr_df_cached = build_screener_df(headline, macro_st,
+                                           tickers=list(WATCHLIST.keys()),
+                                           force=False)
+        if not _scr_df_cached.empty and _sel in _scr_df_cached["Ticker"].values:
+            _scr_row = _scr_df_cached[_scr_df_cached["Ticker"] == _sel].iloc[0].to_dict()
+    except Exception:
+        pass
+    render_analyst_view(_sel, headline, macro_st, _scr_row)
+    st.stop()
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
 tab_screener, tab_live, tab_hold, tab_oracle_t, tab_macro, tab_recap, tab_cv = st.tabs([
@@ -727,7 +750,9 @@ with tab_screener:
             region_flag = "🇺🇸" if row["Region"] == "USA" else "🇮🇳"
             atr_col  = "#ff4757" if row["ATR%"] > 3 else "#ffa500" if row["ATR%"] > 1.5 else "#00e676"
 
-            st.markdown(f"""
+            _row_left, _row_btn = st.columns([11, 1])
+            with _row_left:
+                st.markdown(f"""
 <div class="screener-row" style="display:grid;grid-template-columns:90px 130px 60px 70px 90px 70px 60px 80px 80px 80px 55px 1fr;gap:4px;padding:9px 14px;">
   <span style="font-weight:700;font-size:0.83rem;">{row['Ticker']}</span>
   <span style="color:#94a3b8;font-size:0.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{row['Name']}">{row['Name']}</span>
@@ -743,6 +768,10 @@ with tab_screener:
   <span style="font-size:0.72rem;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
         title="{row['Signal']}">{row['Signal'][:90]}{"…" if len(row['Signal'])>90 else ""}</span>
 </div>""", unsafe_allow_html=True)
+            with _row_btn:
+                if st.button("→", key=f"drill_{row['Ticker']}", help=f"Open {row['Ticker']} analyst view"):
+                    st.session_state["selected_stock"] = row["Ticker"]
+                    st.rerun()
 
         st.divider()
 
