@@ -69,24 +69,10 @@ def _build_chat_context(ticker: str, data: dict) -> str:
 
 def _call_gemini_chat(prompt: str) -> str:
     """Call Gemini with rate-limit handling. Returns response text."""
-    import os, re, google.generativeai as genai
-    from pathlib import Path as P
+    import google.generativeai as genai
+    from analyze import _get_api_key
 
-    key = os.environ.get("GEMINI_API_KEY", "")
-    if not key:
-        try:
-            key = st.secrets.get("GEMINI_API_KEY", "")
-        except Exception:
-            pass
-    if not key:
-        try:
-            toml = P(__file__).parent.parent / ".streamlit" / "secrets.toml"
-            if toml.exists():
-                m = re.search(r'GEMINI_API_KEY\s*=\s*"([^"]+)"', toml.read_text())
-                if m:
-                    key = m.group(1)
-        except Exception:
-            pass
+    key = _get_api_key()
     if not key:
         return "API key not configured. Set GEMINI_API_KEY in .streamlit/secrets.toml."
 
