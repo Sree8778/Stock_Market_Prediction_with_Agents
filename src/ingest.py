@@ -246,24 +246,42 @@ def verify_dataset(df: pd.DataFrame, ticker: str = "",
 # ── Core fetchers ──────────────────────────────────────────────────────────────
 def fetch_historical(ticker: str = "SPY", period: str = PERIOD) -> pd.DataFrame:
     print(f"[ingest] Fetching {ticker} historical ({period}) ...")
-    t   = yf.Ticker(ticker)
-    df  = t.history(period=period, interval=INTERVAL, auto_adjust=True)
-    df.index = pd.to_datetime(df.index).tz_localize(None)
-    df  = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-    verify_dataset(df, ticker)
-    safe = ticker.replace("^", "_").replace(".", "_")
-    path = DATA_DIR / f"{safe}_historical.csv"
-    df.to_csv(path)
-    return df
+    try:
+        t   = yf.Ticker(ticker)
+        df  = t.history(period=period, interval=INTERVAL, auto_adjust=True)
+        if df is None or df.empty:
+            print(f"[ingest] WARN {ticker}: empty response from yfinance")
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+        df   = df[cols].dropna()
+        verify_dataset(df, ticker)
+        safe = ticker.replace("^", "_").replace(".", "_")
+        path = DATA_DIR / f"{safe}_historical.csv"
+        df.to_csv(path)
+        return df
+    except Exception as exc:
+        print(f"[ingest] fetch_historical({ticker}) failed: {exc.__class__.__name__}: {exc}")
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
 
 def fetch_realtime(ticker: str = "SPY") -> pd.DataFrame:
-    t  = yf.Ticker(ticker)
-    df = t.history(period="7d", interval="1m", auto_adjust=True)
-    if df.empty:
-        return df
-    df.index = pd.to_datetime(df.index).tz_localize(None)
-    return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    """
+    Fetch 1-min bars for the last 7 days.
+    Returns an empty DataFrame on any failure (market closed, network error,
+    yfinance API change, etc.) so callers can fall back gracefully.
+    """
+    try:
+        t  = yf.Ticker(ticker)
+        df = t.history(period="7d", interval="1m", auto_adjust=True)
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+        return df[cols].dropna()
+    except Exception as exc:
+        print(f"[ingest] fetch_realtime({ticker}) failed: {exc.__class__.__name__}: {exc}")
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
 
 def load_or_fetch(ticker: str = "SPY", refresh: bool = False) -> pd.DataFrame:
