@@ -1,0 +1,9 @@
+yfinance
+pandas
+scikit-learn
+google-generativeai
+streamlit
+plotly
+numpy
+requests
+diskcache

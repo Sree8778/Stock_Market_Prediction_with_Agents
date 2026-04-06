@@ -1,0 +1,14 @@
+{
+  "holdings": [
+    {
+      "ticker": "AAPL",
+      "shares": 9.0,
+      "avg_cost": 255.88999938964844
+    },
+    {
+      "ticker": "GOOGL",
+      "shares": 9.0,
+      "avg_cost": 295.7900085449219
+    }
+  ]
+}

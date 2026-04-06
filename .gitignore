@@ -1,0 +1,35 @@
+# Secrets — never commit API keys
+.streamlit/secrets.toml
+
+# Disk caches (rebuilt at runtime)
+data/.sentiment_cache/
+data/.macro_cache/
+data/.agent_cache/
+data/.corr_cache/
+data/.recap_cache/
+data/.prescriptive_cache/
+data/.social_cache/
+data/.sim_cache/
+data/.regime_cache/
+
+# Python artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter / IDE
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude internal
+.claude/
