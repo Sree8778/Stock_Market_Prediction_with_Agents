@@ -289,8 +289,7 @@ def build_treemap(df: pd.DataFrame) -> object:
             cmin=-1, cmax=1,
             showscale=True,
             colorbar=dict(
-                title="Geo Score",
-                titlefont=dict(color="#64748b", size=10),
+                title=dict(text="Geo Score", font=dict(color="#64748b", size=10)),
                 tickfont=dict(color="#64748b", size=9),
                 thickness=12, len=0.7,
             ),
