@@ -69,10 +69,30 @@ def _build_chat_context(ticker: str, data: dict) -> str:
 
 def _call_gemini_chat(prompt: str) -> str:
     """Call Gemini with rate-limit handling. Returns response text."""
-    import google.generativeai as genai
-    from analyze import _get_api_key
+    import os, re, google.generativeai as genai
+    from pathlib import Path as P
 
-    key = _get_api_key()
+    # 1. Environment variable
+    key = os.environ.get("GEMINI_API_KEY", "")
+
+    # 2. Streamlit secrets (bracket access avoids AttrDict.get quirks)
+    if not key:
+        try:
+            key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            pass
+
+    # 3. Direct TOML file read — most reliable on Windows local runs
+    if not key:
+        try:
+            toml_path = P(__file__).parent.parent / ".streamlit" / "secrets.toml"
+            raw = toml_path.read_text(encoding="utf-8")
+            m = re.search(r'GEMINI_API_KEY\s*=\s*["\']([^"\']+)["\']', raw)
+            if m:
+                key = m.group(1).strip()
+        except Exception:
+            pass
+
     if not key:
         return "API key not configured. Set GEMINI_API_KEY in .streamlit/secrets.toml."
 
